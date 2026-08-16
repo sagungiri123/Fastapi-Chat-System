@@ -1,3 +1,5 @@
+import os
+
 from app.core.database import Base
 from app.models import user, message 
 
@@ -11,6 +13,14 @@ from alembic import context
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Allow DATABASE_URL from environment (used by Docker). If it contains an
+# async driver (postgresql+asyncpg) convert to a sync URL for Alembic.
+env_url = os.environ.get("DATABASE_URL")
+if env_url:
+    if "+asyncpg" in env_url:
+        env_url = env_url.replace("+asyncpg", "")
+    config.set_main_option("sqlalchemy.url", env_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
