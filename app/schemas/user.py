@@ -2,8 +2,8 @@ from pydantic import BaseModel, EmailStr
 
 class UserCreate(BaseModel):
     username: str
-    email: EmailStr
-    Password: str
+    email: EmailStr   # or str if you removed EmailStr
+    password: str     # ← now lowercase 'password'
     
 class UserOut(BaseModel):
     id: int

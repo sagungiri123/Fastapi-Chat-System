@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Real-time Chat</title>
+    <style>
+      body {
+        font-family: Arial;
+        padding: 20px;
+      }
+      #messages {
+        border: 1px solid #ccc;
+        height: 400px;
+        overflow-y: scroll;
+        padding: 10px;
+        margin: 20px 0;
+      }
+      .msg {
+        margin: 5px 0;
+      }
+      .system {
+        color: gray;
+        font-style: italic;
+      }
+      .typing-indicator {
+        color: #888;
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Chat Client</h2>
+    <div>
+      <label for="username">Username</label>
+      <input
+        type="text"
+        id="username"
+        name="username"
+        placeholder="Username"
+        title="Username"
+        value="alice"
+      />
+      <label for="password">Password</label>
+      <input
+        type="password"
+        id="password"
+        name="password"
+        placeholder="Password"
+        title="Password"
+        value="secret"
+      />
+      <button onclick="register()">Register</button>
+      <button onclick="login()">Login</button>
+    </div>
+    <hr />
+    <div>
+      <label for="room">Room</label>
+      <input
+        type="text"
+        id="room"
+        name="room"
+        placeholder="Room"
+        title="Room"
+        value="general"
+      />
+      <button onclick="connectWS()">Connect to Room</button>
+      <button onclick="disconnectWS()">Disconnect</button>
+    </div>
+    <div id="messages"></div>
+    <div>
+      <label for="msgInput">Message</label>
+      <input
+        type="text"
+        id="msgInput"
+        name="msgInput"
+        placeholder="Type a message..."
+        title="Message"
+        disabled
+      />
+      <button id="sendBtn" onclick="sendMessage()" disabled>Send</button>
+      <span id="typingStatus"></span>
+    </div>
+
+    <script>
+      let ws = null;
+      let token = null;
+      let currentUser = null;
+
+      function logMessage(text, isSystem = true) {
+        const div = document.getElementById("messages");
+        const p = document.createElement("div");
+        p.className = isSystem ? "system" : "msg";
+        p.textContent = text;
+        div.appendChild(p);
+        div.scrollTop = div.scrollHeight;
+      }
+      
+      // Registration
+
+      async function register() {
+        const username = document.getElementById("username").value;
+        const password = document.getElementById("password").value;
+        const res = await fetch("/api/v1/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username,
+            email: `${username}@test.com`,
+            password,
+          }),
+        });
+
+        if (res.ok) logMessage(`Registration as ${username}`, true);
+        else logMessage(`Registration failed: ${await res.text()}`, true);
+      }
+
+      //Login
+
+      async function login() {
+        const username = document.getElementById("username").value;
+        const password = document.getElementById("password").value;
+        const formData = new URLSearchParams({ username, password });
+        const res = await fetch("/api/v1/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: formData,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          token = data.access_token;
+          currentUser = username;
+          logMessage(`logged in as ${username}`, true);
+          document.getElementById(`msgInput`).disabled = false;
+          document.getElementById(`sendBtn`).disabled = false;
+        } else {
+          logMessage(` Login failed:${await res.text()}`, true);
+        }
+      }
+
+      // Establish connection with WebSocket.
+
+      function connectWS() {
+        if (!token) {
+          alert("Please login first");
+          return;
+        }
+        const room = document.getElementById("room").value;
+
+        
+
+        const wsUrl = `ws://${window.location.host}/ws/${room}?token=${token}`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          logMessage(`🔗 Connected to room: ${room}`, true);
+        };
+
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          // Check if it's a typing event or a message event
+          if (data.type === "typing") {
+            document.getElementById("typingStatus").textContent =
+              `${data.username} is typing...`;
+            clearTimeout(window.typingTimeout);
+            window.typingTimeout = setTimeout(() => {
+              document.getElementById("typingStatus").textContent = "";
+            }, 2000);
+          } else if (data.type === "presence") {
+            logMessage(`👤 ${data.username} ${data.status}`, true);
+          } else {
+            // Regular message
+            const time = new Date(data.created_at).toLocaleTimeString();
+            logMessage(
+              `[${time}] ${data.username || "Unknown"}: ${data.content}`,
+              false,
+            );
+          }
+        };
+
+        ws.onclose = () => {
+          logMessage("🔌 Disconnected", true);
+          document.getElementById("typingStatus").textContent = "";
+        };
+
+        ws.onerror = (err) => {
+          logMessage(`⚠️ WebSocket Error: ${err}`, true);
+        };
+      }
+
+      function disconnectWS() {
+        if (ws) ws.close();
+      }
+
+      function sendMessage() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          alert("Not connected");
+          return;
+        }
+        const input = document.getElementById("msgInput");
+        const content = input.value.trim();
+        if (!content) return;
+        ws.send(JSON.stringify({ type: "message", content }));
+        input.value = "";
+      }
+
+      // Add typing detection
+      document
+        .getElementById("msgInput")
+        .addEventListener("input", function () {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "typing", is_typing: true }));
+            clearTimeout(window.typingSendTimeout);
+            window.typingSendTimeout = setTimeout(() => {
+              ws.send(JSON.stringify({ type: "typing", is_typing: false }));
+            }, 1500);
+          }
+        });
+    </script>
+  </body>
+</html>
