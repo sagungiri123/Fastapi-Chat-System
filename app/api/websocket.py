@@ -31,6 +31,7 @@ async def websocket_endpoint(
     async for db in get_db():
         current_user = await get_user_from_token(token, db)
         break
+
     else:
         await websocket.close(code=1008)
         return
@@ -38,6 +39,22 @@ async def websocket_endpoint(
     if not current_user:
         await websocket.close(code=1008)
         return
+    if room_id.startswith("dm_"):
+        parts = room_id.split("_")
+        if len(parts) == 3:
+            try:
+                user1, user2 = int(parts[1]), int(parts[2])
+            except ValueError:
+                await websocket.close(code=1008, reason="Invalid room format")
+                return
+
+            # Check if the authenticated user is one of the two participants
+            if current_user.id not in (user1, user2):
+                await websocket.close(code=1008, reason="Not authorized for this DM")
+                return
+        else:
+            await websocket.close(code=1008, reason="Invalid DM room format")
+            return
 
     await websocket.accept()
 

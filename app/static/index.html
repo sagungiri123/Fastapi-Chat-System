@@ -80,6 +80,13 @@
       />
       <button id="sendBtn" onclick="sendMessage()" disabled>Send</button>
       <span id="typingStatus"></span>
+      <hr />
+      <div>
+        <h3>Direct Messages</h3>
+        <input type="text" id="dmUsername" placeholder="Search username..." />
+        <button onclick="searchUser()">Search</button>
+        <div id="searchResults"></div>
+      </div>
     </div>
 
     <script>
@@ -95,7 +102,7 @@
         div.appendChild(p);
         div.scrollTop = div.scrollHeight;
       }
-      
+
       // Registration
 
       async function register() {
@@ -138,6 +145,53 @@
         }
       }
 
+    // search user
+
+      async function searchUser() {
+        const query = document.getElementById("dmUsername").value.trim();
+        if (!query) return;
+
+        const res = await fetch(
+          `/api/v1/users/search?username=${encodeURIComponent(query)}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+        if (!res.ok) {
+          alert("Search failed");
+          return;
+        }
+        const users = await res.json();
+        const resultsDiv = document.getElementById("searchResults");
+        resultsDiv.innerHTML = "";
+
+        if (users.length === 0) {
+          resultsDiv.innerHTML = "<p>No users found.</p>";
+          return;
+        }
+
+        users.forEach((user) => {
+          const btn = document.createElement("button");
+          btn.textContent = `Chat with ${user.username}`;
+          btn.onclick = () => startDM(user.id);
+          resultsDiv.appendChild(btn);
+          resultsDiv.appendChild(document.createElement("br"));
+        });
+      }
+
+      async function startDM(targetUserId) {
+        const res = await fetch(`/api/v1/users/${targetUserId}/dm_room`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          alert("Failed to get DM room");
+          return;
+        }
+        const data = await res.json();
+        document.getElementById("room").value = data.room_id; // Set the room input
+        connectWS(); // Reuse the existing connection function!
+      }
+
       // Establish connection with WebSocket.
 
       function connectWS() {
@@ -146,8 +200,6 @@
           return;
         }
         const room = document.getElementById("room").value;
-
-        
 
         const wsUrl = `ws://${window.location.host}/ws/${room}?token=${token}`;
         ws = new WebSocket(wsUrl);
