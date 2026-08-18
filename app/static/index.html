@@ -19,6 +19,12 @@
       .msg {
         margin: 5px 0;
       }
+      .msg.me {
+        background: #e6f7ff;
+        padding: 6px 8px;
+        border-radius: 6px;
+        display: inline-block;
+      }
       .system {
         color: gray;
         font-style: italic;
@@ -26,6 +32,23 @@
       .typing-indicator {
         color: #888;
         font-style: italic;
+      }
+
+      #onlineUsers {
+        background: #f0f2f5;
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin-bottom: 10px;
+        font-size: 14px;
+      }
+      #onlineUsers .user-badge {
+        display: inline-block;
+        background: #25d366;
+        color: white;
+        border-radius: 12px;
+        padding: 2px 10px;
+        margin: 2px 4px;
+        font-size: 12px;
       }
     </style>
   </head>
@@ -67,7 +90,26 @@
       <button onclick="connectWS()">Connect to Room</button>
       <button onclick="disconnectWS()">Disconnect</button>
     </div>
+
+    <div id="onlineUsers">
+      <strong>Online:</strong>
+      <span id="userList">Nobody is here yet.</span>
+    </div>
+
+    <div>
+      <input
+        type="text"
+        id="searchInput"
+        placeholder="Search messages..."
+        style="width: 70%"
+      />
+      <button onclick="searchMessages()">Search</button>
+      <button onclick="clearSearch()">Clear</button>
+      <span id="searchInfo"></span>
+    </div>
+
     <div id="messages"></div>
+
     <div>
       <label for="msgInput">Message</label>
       <input
@@ -81,6 +123,7 @@
       <button id="sendBtn" onclick="sendMessage()" disabled>Send</button>
       <span id="typingStatus"></span>
       <hr />
+
       <div>
         <h3>Direct Messages</h3>
         <input type="text" id="dmUsername" placeholder="Search username..." />
@@ -99,6 +142,82 @@
       let initialLoadDone = false;
       let token = null;
       let currentUser = null;
+      // track seen message ids to avoid duplicates
+      const seenMessageIds = new Set();
+      let isSearchMode = false;
+      let originalMessages = [];
+
+      // search function
+      async function searchMessages() {
+        const query = document.getElementById("searchInput").value.trim();
+        if (!query) {
+          alert("Please enter a search term.");
+          return;
+        }
+
+        const room = document.getElementById("room").value;
+        if (!room) {
+          alert("Please connect to a room first.");
+          return;
+        }
+
+        try {
+          const response = await fetch(
+            `/api/v1/messages/search?q=${encodeURIComponent(query)}&room_id=${encodeURIComponent(room)}&limit=50`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+
+          if (!response.ok) {
+            alert("Search failed.");
+            return;
+          }
+
+          const messages = await response.json();
+          const messagesDiv = document.getElementById("messages");
+
+          // Store original messages if not already stored
+          if (!isSearchMode) {
+            originalMessages = messagesDiv.innerHTML;
+          }
+
+          isSearchMode = true;
+          messagesDiv.innerHTML = "";
+
+          if (messages.length === 0) {
+            messagesDiv.innerHTML =
+              '<div class="system">No messages found matching your query.</div>';
+          } else {
+            messages.forEach((msg) => {
+              const p = document.createElement("div");
+              p.className = "msg";
+              const time = new Date(msg.created_at).toLocaleTimeString();
+              // Highlight the search term (simple version)
+              const highlightedContent = msg.content.replace(
+                new RegExp(query, "gi"),
+                (match) => `<mark>${match}</mark>`,
+              );
+              p.innerHTML = `[${time}] <strong>${msg.username || "Unknown"}</strong>: ${highlightedContent}`;
+              messagesDiv.appendChild(p);
+            });
+          }
+
+          document.getElementById("searchInfo").textContent =
+            `Showing ${messages.length} results for "${query}"`;
+        } catch (error) {
+          console.error("Search error:", error);
+          alert("Search failed. Check console for details.");
+        }
+      }
+
+      function clearSearch() {
+        if (isSearchMode && originalMessages) {
+          document.getElementById("messages").innerHTML = originalMessages;
+          isSearchMode = false;
+          originalMessages = null;
+          document.getElementById("searchInfo").textContent = "";
+          document.getElementById("searchInput").value = "";
+        }
+      }
 
       function logMessage(text, isSystem = true) {
         const div = document.getElementById("messages");
@@ -232,52 +351,53 @@
               document.getElementById("typingStatus").textContent = "";
             }, 2000);
           } else if (data.type === "presence") {
-
             logMessage(`👤 ${data.username} ${data.status}`, true);
-
+          } else if (data.type === "online_list") {
+            const userListSpan = document.getElementById('userList');
+            const users = Array.from(new Set(data.users || []));
+            if (!users || users.length === 0) {
+              userListSpan.innerHTML = 'Nobody is here yet.';
+            } else {
+              userListSpan.innerHTML = users.map(u =>
+                `<span class="user-badge">${u}</span>`
+              ).join(' ');
+            }
           } else if (data.type === "message") {
-
             const messagesDiv = document.getElementById("messages");
 
             // Remove the "No messages yet" placeholder if it exists
+            // Avoid duplicate messages by id
+            if (data.id && seenMessageIds.has(data.id)) return;
+            if (data.id) seenMessageIds.add(data.id);
+
 
             const placeholder = messagesDiv.querySelector(".system");
             if (
-
               placeholder &&
-
               placeholder.textContent.includes("No messages yet")
-
             ) {
-
               messagesDiv.innerHTML = "";
-
             }
 
             const p = document.createElement("div");
-
             p.className = "msg";
-            const time = new Date(data.created_at).toLocaleTimeString();
-
+            if (data.username && currentUser && data.username === currentUser) {
+              p.classList.add("me");
+            }
+            const time = data.created_at ? new Date(data.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
             p.textContent = `[${time}] ${data.username || "Unknown"}: ${data.content}`;
-
             messagesDiv.appendChild(p);
 
             // Auto-scroll down ONLY if the user is already at the bottom (i.e., they are following the conversation)
             const isAtBottom =
-
               messagesDiv.scrollHeight -
-
-              messagesDiv.scrollTop -
-
-              messagesDiv.clientHeight < 10;
+                messagesDiv.scrollTop -
+                messagesDiv.clientHeight <
+              10;
 
             if (isAtBottom) {
-
               messagesDiv.scrollTop = messagesDiv.scrollHeight;
-
             }
-
           }
         };
 
@@ -366,6 +486,8 @@
           if (beforeId === null) {
             messagesDiv.innerHTML = "";
             messages.forEach((msg) => {
+              // mark as seen
+              if (msg.id) seenMessageIds.add(msg.id);
               const p = document.createElement("div");
               p.className = "msg";
               const time = new Date(msg.created_at).toLocaleTimeString();
@@ -385,6 +507,8 @@
 
             const fragment = document.createDocumentFragment();
             messages.forEach((msg) => {
+              if (msg.id && seenMessageIds.has(msg.id)) return;
+              if (msg.id) seenMessageIds.add(msg.id);
               const p = document.createElement("div");
               p.className = "msg";
               const time = new Date(msg.created_at).toLocaleTimeString();
