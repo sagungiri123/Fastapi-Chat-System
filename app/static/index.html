@@ -91,6 +91,12 @@
 
     <script>
       let ws = null;
+      let currentRoom = null;
+      let oldestMessageId = null;
+      let oldestMessageTimestamp = null;
+      let isLoadingMessages = false;
+      let hasMoreMessages = true;
+      let initialLoadDone = false;
       let token = null;
       let currentUser = null;
 
@@ -137,6 +143,7 @@
           const data = await res.json();
           token = data.access_token;
           currentUser = username;
+          console.log("login token:", token);
           logMessage(`logged in as ${username}`, true);
           document.getElementById(`msgInput`).disabled = false;
           document.getElementById(`sendBtn`).disabled = false;
@@ -145,7 +152,7 @@
         }
       }
 
-    // search user
+      // search user
 
       async function searchUser() {
         const query = document.getElementById("dmUsername").value.trim();
@@ -206,6 +213,12 @@
 
         ws.onopen = () => {
           logMessage(`🔗 Connected to room: ${room}`, true);
+          currentRoom = room;
+          oldestMessageId = null;
+          oldestMessageTimestamp = null;
+          hasMoreMessages = true;
+          isLoadingMessages = false;
+          LoadMessages(room);
         };
 
         ws.onmessage = (event) => {
@@ -219,24 +232,64 @@
               document.getElementById("typingStatus").textContent = "";
             }, 2000);
           } else if (data.type === "presence") {
+
             logMessage(`👤 ${data.username} ${data.status}`, true);
-          } else {
-            // Regular message
+
+          } else if (data.type === "message") {
+
+            const messagesDiv = document.getElementById("messages");
+
+            // Remove the "No messages yet" placeholder if it exists
+
+            const placeholder = messagesDiv.querySelector(".system");
+            if (
+
+              placeholder &&
+
+              placeholder.textContent.includes("No messages yet")
+
+            ) {
+
+              messagesDiv.innerHTML = "";
+
+            }
+
+            const p = document.createElement("div");
+
+            p.className = "msg";
             const time = new Date(data.created_at).toLocaleTimeString();
-            logMessage(
-              `[${time}] ${data.username || "Unknown"}: ${data.content}`,
-              false,
-            );
+
+            p.textContent = `[${time}] ${data.username || "Unknown"}: ${data.content}`;
+
+            messagesDiv.appendChild(p);
+
+            // Auto-scroll down ONLY if the user is already at the bottom (i.e., they are following the conversation)
+            const isAtBottom =
+
+              messagesDiv.scrollHeight -
+
+              messagesDiv.scrollTop -
+
+              messagesDiv.clientHeight < 10;
+
+            if (isAtBottom) {
+
+              messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+            }
+
           }
         };
 
         ws.onclose = () => {
           logMessage("🔌 Disconnected", true);
           document.getElementById("typingStatus").textContent = "";
+          console.log("WebSocket closed", ws);
         };
 
         ws.onerror = (err) => {
           logMessage(`⚠️ WebSocket Error: ${err}`, true);
+          console.error("WebSocket error", err);
         };
       }
 
@@ -266,6 +319,115 @@
             window.typingSendTimeout = setTimeout(() => {
               ws.send(JSON.stringify({ type: "typing", is_typing: false }));
             }, 1500);
+          }
+        });
+      async function LoadMessages(
+        roomId,
+        beforeId = null,
+        beforeTimestamp = null,
+      ) {
+        if (isLoadingMessages) return;
+        if (!hasMoreMessages && beforeId !== null) return;
+
+        isLoadingMessages = true;
+
+        let url = `/api/v1/messages/${roomId}?limit=20`;
+        if (beforeId && beforeTimestamp) {
+          url += `&before_id=${beforeId}&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
+        }
+
+        try {
+          const response = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (!response.ok) {
+            console.error("Failed to load messages:", response.status);
+            return;
+          }
+
+          const messages = await response.json();
+
+          if (messages.length < 20 && beforeId != null) {
+            hasMoreMessages = false;
+          }
+
+          if (messages.length === 0) {
+            if (beforeId === null) {
+              document.getElementById("messages").innerHTML =
+                '<div class="system">No messages yet. Say hello!</div>';
+            }
+            hasMoreMessages = false;
+            return;
+          }
+
+          const messagesDiv = document.getElementById("messages");
+
+          if (beforeId === null) {
+            messagesDiv.innerHTML = "";
+            messages.forEach((msg) => {
+              const p = document.createElement("div");
+              p.className = "msg";
+              const time = new Date(msg.created_at).toLocaleTimeString();
+              p.textContent = `[${time}] ${msg.username || "Unknown"}: ${msg.content}`;
+              messagesDiv.appendChild(p);
+            });
+
+            if (messages.length > 0) {
+              const oldest = messages[0];
+              oldestMessageId = oldest.id;
+              oldestMessageTimestamp = oldest.created_at;
+            }
+
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+          } else {
+            const oldScrollHeight = messagesDiv.scrollHeight;
+
+            const fragment = document.createDocumentFragment();
+            messages.forEach((msg) => {
+              const p = document.createElement("div");
+              p.className = "msg";
+              const time = new Date(msg.created_at).toLocaleTimeString();
+              p.textContent = `[${time}] ${msg.username || "Unknown"}: ${msg.content}`;
+              fragment.appendChild(p);
+            });
+
+            // Prepend the fragment to the messages container
+            messagesDiv.prepend(fragment);
+
+            // Update the cursor to the new oldest message
+            if (messages.length > 0) {
+              const oldest = messages[0];
+              oldestMessageId = oldest.id;
+              oldestMessageTimestamp = oldest.created_at;
+            }
+
+            // CRITICAL: Adjust scroll position to prevent jumping.
+            // The new content added above increased the scroll height.
+            // We scroll down by exactly the amount of new content added.
+            const newScrollHeight = messagesDiv.scrollHeight;
+            const addedHeight = newScrollHeight - oldScrollHeight;
+            messagesDiv.scrollTop = addedHeight;
+          }
+        } catch (error) {
+          console.error("Error loading messages:", error);
+        } finally {
+          isLoadingMessages = false;
+        }
+      }
+      // Scroll listener for infinite scrolling
+      document
+        .getElementById("messages")
+        .addEventListener("scroll", function () {
+          // If scrolled to the top, we have more messages, and we aren't already loading...
+          if (
+            this.scrollTop === 0 &&
+            hasMoreMessages &&
+            !isLoadingMessages &&
+            currentRoom
+          ) {
+            // Load older messages
+            LoadMessages(currentRoom, oldestMessageId, oldestMessageTimestamp);
           }
         });
     </script>

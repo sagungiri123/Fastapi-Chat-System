@@ -102,9 +102,11 @@ async def websocket_endpoint(
                     await db.refresh(new_msg)
                     # Prepare payload for broadcasting
                     payload = {
+                        "type": "message",
                         "id": new_msg.id,
                         "content": new_msg.content,
                         "user_id": new_msg.user_id,
+                        "username": getattr(current_user, "username", None),
                         "room_id": new_msg.room_id,
                         "created_at": new_msg.created_at.isoformat(),
                     }
